@@ -12,7 +12,8 @@ import {
   Send,
   Copy,
   Check,
-  Code
+  Code,
+  Download
 } from 'lucide-react';
 import { db } from '../services/db';
 import { verifyRfidEvent } from '../services/rfidEngine';
@@ -404,6 +405,18 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
     navigator.clipboard.writeText(text);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const handleDownloadIno = (content, filename) => {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || 'TransitIQ_ESP32_Firebase.ino';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const exportCSV = () => {
@@ -1015,7 +1028,27 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
               style={{ padding: '8px 18px', borderRadius: '999px' }}
             >
               {copiedCode ? <Check size={14} /> : <Copy size={14} />}
-              <span>{copiedCode ? 'Copied to Clipboard!' : 'Copy Arduino Code'}</span>
+              <span>{copiedCode ? 'Copied to Clipboard!' : 'Copy Code'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleDownloadIno(
+                codeMode === 'usb_serial' 
+                  ? RFID_USB_SERIAL_CODE 
+                  : codeMode === 'wifi_firebase' 
+                  ? RFID_FIREBASE_FCM_CODE 
+                  : RFID_WIFI_HTTP_CODE,
+                codeMode === 'wifi_firebase' 
+                  ? 'TransitIQ_ESP32_Firebase.ino' 
+                  : 'TransitIQ_ESP32_Reader.ino'
+              )}
+              className="btn btn-outline btn-sm"
+              style={{ padding: '8px 18px', borderRadius: '999px', color: 'var(--accent-teal)', borderColor: 'var(--accent-teal)' }}
+              title="Download standalone Arduino .ino file"
+            >
+              <Download size={14} />
+              <span>Download .INO Sketch</span>
             </button>
           </div>
         </div>

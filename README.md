@@ -27,8 +27,8 @@ TransitIQ is a full-stack, responsive IoT and cloud-powered transport management
 ### Components Used:
 - **Microcontroller**: ESP32-WROOM-32 DevKit (30 pins)
 - **RFID Module**: MFRC522 (13.56 MHz SPI Reader)
-- **Passive Cards / Keyfobs**: Mifare Classic 1K / S50
-- **Optional**: Active Buzzer (GPIO 12), Green LED (GPIO 14), Red LED (GPIO 27)
+- **Passive Cards / Keyfobs**: Mifare Classic 1K / S50 (13.56 MHz)
+*(No Buzzer, No Red LED, and No Green LED needed — all verification & attendance is logged on the TransitIQ website)*
 
 ### SPI Pinout Mapping:
 | RFID RC522 Pin | ESP32-WROOM-32 GPIO | Description / Notes |

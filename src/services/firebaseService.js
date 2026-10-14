@@ -136,11 +136,53 @@ class FirebaseTransportService {
         }
       });
 
+      // Subscribe to live Firestore boarding records (e.g. from ESP32 Wi-Fi taps)
+      try {
+        const boardingQ = query(collection(this.firestore, 'boarding_records'), orderBy('event_timestamp', 'desc'));
+        onSnapshot(boardingQ, (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+              const data = change.doc.data();
+              // Dispatch custom event for dashboard and live tables
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('transitiq_cloud_boarding_event', { detail: { id: change.doc.id, ...data } }));
+              }
+            }
+          });
+        });
+      } catch (err) {
+        console.warn('Boarding records subscription notice:', err);
+      }
+
       return { connected: true, message: `Successfully connected to Firebase Project: ${config.projectId}` };
     } catch (err) {
       console.error('Firebase init error:', err);
       this.isFirebaseConnected = false;
       return { connected: false, message: err.message };
+    }
+  }
+
+  /**
+   * Persist a verified boarding event to Firestore 'boarding_records' collection.
+   * This immediately triggers the Firebase Cloud Function 'onBoardingRecordCreated'
+   * which sends the FCM Push Notification to the parent's registered device.
+   */
+  async syncBoardingRecord(record) {
+    if (!this.isFirebaseConnected || !this.firestore) {
+      console.log('Firebase not connected to cloud; boarding record stored in local database.');
+      return null;
+    }
+
+    try {
+      const docRef = await addDoc(collection(this.firestore, 'boarding_records'), {
+        ...record,
+        firestore_created_at: serverTimestamp()
+      });
+      console.log(`Boarding event synced to Firestore document ${docRef.id}. Cloud Function triggered.`);
+      return docRef.id;
+    } catch (err) {
+      console.warn('Failed to sync boarding record to Firestore:', err);
+      return null;
     }
   }
 

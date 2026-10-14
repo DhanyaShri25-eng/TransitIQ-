@@ -19,142 +19,94 @@ import { verifyRfidEvent, syncOfflineBatch, soundFx } from '../services/rfidEngi
 import { db } from '../services/db';
 
 const ESP32_FIRMWARE_CODE = `/*
- * SmartPassFlow — ESP32 RFID Bus Reader & IoT Controller
- * Hardware: ESP32 DevKit V1, RC522 RFID (SPI), SSD1306 OLED (I2C), MicroSD Module
- * Features: Local offline buffering on SD card, HTTPS authenticated ingestion, Buzzer & LEDs
+ * TransitIQ — ESP32 + RC522 RFID Tap Reader
+ * Hardware: ESP32-WROOM-32 DevKit + MFRC522 RFID (SPI)
+ *
+ * NOTE: NO Buzzer, NO Red LED, and NO Green LED required.
+ * When a student taps their card, this code sends the Card UID
+ * to the TransitIQ website so the boarding record, student identity,
+ * and parent notifications are instantly recorded.
+ *
+ * Wiring Connections:
+ *   RC522 Pin  ->  ESP32-WROOM-32 GPIO
+ *   ----------------------------------
+ *   SDA (SS)   ->  GPIO 5
+ *   SCK        ->  GPIO 18
+ *   MOSI       ->  GPIO 23
+ *   MISO       ->  GPIO 19
+ *   RST        ->  GPIO 22
+ *   3.3V       ->  3V3  (WARNING: 3.3V only! Do NOT connect to 5V)
+ *   GND        ->  GND
  */
 
-#include <WiFi.h>
-#include <HTTPClient.h>
 #include <SPI.h>
 #include <MFRC522.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include <SD.h>
-#include <ArduinoJson.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 
 #define SS_PIN    5
 #define RST_PIN   22
-#define BUZZER    12
-#define LED_GREEN 14
-#define LED_RED   27
-#define SD_CS     13
 
-const char* ssid = "CampusTransport_Fleet";
-const char* password = "WiFi_Secure_Password";
-const char* serverApiUrl = "https://your-domain.edu/api/rfid/verify";
+const char* ssid = "YOUR_BUS_WIFI";
+const char* password = "YOUR_WIFI_PASSWORD";
+const char* serverApiUrl = "http://YOUR_SERVER_IP:5173/api/rfid/verify";
 const char* deviceId = "ESP32-BUS-001";
-const char* busId = "BUS-101";
-const char* authToken = "auth_tok_esp32_bus101_secure";
+const char* busId = "54";
 
 MFRC522 rfid(SS_PIN, RST_PIN);
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
 void setup() {
   Serial.begin(115200);
   SPI.begin();
   rfid.PCD_Init();
-  pinMode(BUZZER, OUTPUT);
-  pinMode(LED_GREEN, OUTPUT);
-  pinMode(LED_RED, OUTPUT);
 
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.setTextColor(WHITE);
-  display.setCursor(0, 10);
-  display.println("SmartPassFlow ESP32");
-  display.println("Connecting WiFi...");
-  display.display();
+  Serial.println("=========================================");
+  Serial.println("TransitIQ RFID Bus Gate Ready");
+  Serial.print("Device: "); Serial.println(deviceId);
+  Serial.print("Bus: "); Serial.println(busId);
+  Serial.println("Waiting for student RFID card tap...");
+  Serial.println("=========================================");
 
   WiFi.begin(ssid, password);
-  SD.begin(SD_CS);
 }
 
 void loop() {
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
+  // Check if a new card is placed near the RC522 reader
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
+    return;
+  }
 
+  // Extract Card UID in uppercase hexadecimal
   String cardUid = "";
   for (byte i = 0; i < rfid.uid.size; i++) {
-    cardUid += String(rfid.uid.uidByte[i] < 0x10 ? "0" : "");
+    if (rfid.uid.uidByte[i] < 0x10) cardUid += "0";
     cardUid += String(rfid.uid.uidByte[i], HEX);
   }
   cardUid.toUpperCase();
 
-  processCardTap(cardUid);
-  rfid.PICC_HaltA();
-  delay(1000);
-}
+  // 1. Output to Serial (Web Serial USB catches this directly on website)
+  Serial.print("CARD_TAP:");
+  Serial.println(cardUid);
 
-void processCardTap(String uid) {
+  // 2. If Wi-Fi connected, also POST JSON payload to website backend
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
     http.begin(serverApiUrl);
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", String("Bearer ") + authToken);
 
-    StaticJsonDocument<256> doc;
-    doc["event_id"] = "EVT-" + String(millis());
-    doc["device_id"] = deviceId;
-    doc["bus_id"] = busId;
-    doc["card_uid"] = uid;
-    doc["timestamp"] = "2026-10-13T08:15:00Z";
+    String json = "{\\"device_id\\":\\"" + String(deviceId) + 
+                  "\\",\\"bus_id\\":\\"" + String(busId) + 
+                  "\\",\\"card_uid\\":\\"" + cardUid + "\\"}";
 
-    String payload;
-    serializeJson(doc, payload);
-    int httpCode = http.POST(payload);
-
-    if (httpCode == 200) {
-      String response = http.getString();
-      handleVerificationResponse(response);
-    } else {
-      bufferEventToSD(payload);
-    }
+    int code = http.POST(json);
+    Serial.println("Website Response Code: " + String(code));
     http.end();
-  } else {
-    // Offline Mode: Buffer event to MicroSD card
-    StaticJsonDocument<256> doc;
-    doc["event_id"] = "OFF-" + String(millis());
-    doc["device_id"] = deviceId;
-    doc["bus_id"] = busId;
-    doc["card_uid"] = uid;
-    String payload;
-    serializeJson(doc, payload);
-    bufferEventToSD(payload);
   }
-}
 
-void bufferEventToSD(String jsonEvent) {
-  File file = SD.open("/offline_queue.txt", FILE_APPEND);
-  if (file) {
-    file.println(jsonEvent);
-    file.close();
-  }
-}
-
-void handleVerificationResponse(String json) {
-  StaticJsonDocument<256> res;
-  deserializeJson(res, json);
-  const char* status = res["verification_status"];
-
-  display.clearDisplay();
-  display.setCursor(0, 10);
-  if (String(status) == "VALID") {
-    digitalWrite(LED_GREEN, HIGH);
-    tone(BUZZER, 1200, 150);
-    display.println("ACCESS GRANTED");
-    display.println(res["student_name"].as<const char*>());
-    display.println("Welcome Aboard!");
-  } else {
-    digitalWrite(LED_RED, HIGH);
-    tone(BUZZER, 200, 400);
-    display.println("ACCESS DENIED");
-    display.println(res["reason"].as<const char*>());
-  }
-  display.display();
-  delay(1500);
-  digitalWrite(LED_GREEN, LOW);
-  digitalWrite(LED_RED, LOW);
+  // Halt card to prevent repeated scan triggers
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  delay(1200); // 1.2s debounce delay
 }
 `;
 
@@ -293,7 +245,7 @@ export default function HardwareSimulator({ data, onRefresh }) {
             ESP32 Hardware RFID Reader & Terminal
           </h2>
           <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            Real-time emulation of the ESP32 microcontroller, 128x64 OLED display, dual status LEDs, and MicroSD card queue.
+            Real-time emulation of the ESP32 microcontroller, RC522 RFID card scanner, and instant cloud verification.
           </p>
         </div>
 
@@ -338,43 +290,12 @@ export default function HardwareSimulator({ data, onRefresh }) {
                 </span>
               </div>
 
-              {/* Status LEDs */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {/* Blue LED (WiFi) */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <div style={{
-                    width: '10px',
-                    height: '10px',
-                    borderRadius: '50%',
-                    background: ledState.blue ? '#00D0FF' : '#334155',
-                    boxShadow: ledState.blue ? '0 0 10px #00D0FF' : 'none'
-                  }} />
-                  <span style={{ fontSize: '10px', color: '#64748B' }}>WIFI</span>
-                </div>
-
-                {/* Green LED (Valid) */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <div style={{
-                    width: '10px',
-                    height: '10px',
-                    borderRadius: '50%',
-                    background: ledState.green ? '#10B981' : '#1E293B',
-                    boxShadow: ledState.green ? '0 0 12px #10B981' : 'none'
-                  }} />
-                  <span style={{ fontSize: '10px', color: '#64748B' }}>OK</span>
-                </div>
-
-                {/* Red LED (Error) */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <div style={{
-                    width: '10px',
-                    height: '10px',
-                    borderRadius: '50%',
-                    background: ledState.red ? '#EF4444' : '#1E293B',
-                    boxShadow: ledState.red ? '0 0 12px #EF4444' : 'none'
-                  }} />
-                  <span style={{ fontSize: '10px', color: '#64748B' }}>ERR</span>
-                </div>
+              {/* RFID Scanner Status */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="badge badge-valid" style={{ fontSize: '11px', padding: '3px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <Radio size={12} />
+                  <span>RC522 ACTIVE</span>
+                </span>
               </div>
             </div>
 

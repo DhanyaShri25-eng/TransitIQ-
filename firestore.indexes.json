@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "parent_devices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "student_id", "order": "ASCENDING" },
+        { "fieldPath": "registered_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "boarding_records",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "student_id", "order": "ASCENDING" },
+        { "fieldPath": "event_timestamp", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

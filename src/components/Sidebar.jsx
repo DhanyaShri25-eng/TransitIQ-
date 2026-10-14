@@ -19,7 +19,8 @@ import {
   LogOut,
   History,
   Shield,
-  Layers
+  Layers,
+  Bell
 } from 'lucide-react';
 
 export const NAV_ITEMS = [
@@ -31,6 +32,7 @@ export const NAV_ITEMS = [
   { id: 'routes', label: 'Routes', icon: MapPin },
   { id: 'bus-passes', label: 'Bus Passes', icon: Ticket },
   { id: 'boarding-records', label: 'Scan Records', icon: ClipboardList },
+  { id: 'parent-fcm', label: 'Parent FCM Alerts', icon: Bell },
   { id: 'security-alerts', label: 'Wrong Bus Alerts', icon: AlertTriangle, hasAlertBadge: true },
   { id: 'offline-sync', label: 'Offline Sync', icon: RefreshCw },
   { id: 'devices', label: 'Devices', icon: Cpu },

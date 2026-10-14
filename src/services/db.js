@@ -194,11 +194,12 @@ export const INITIAL_DATA = {
     college_name: 'TransitIQ Smart Transport Campus',
     firebase_config: {
       apiKey: '',
-      authDomain: '',
-      projectId: '',
-      storageBucket: '',
+      authDomain: 'transitiq-c2d78.firebaseapp.com',
+      projectId: 'transitiq-c2d78',
+      storageBucket: 'transitiq-c2d78.appspot.com',
       messagingSenderId: '',
       appId: '',
+      vapidKey: '',
       connected: false
     }
   }

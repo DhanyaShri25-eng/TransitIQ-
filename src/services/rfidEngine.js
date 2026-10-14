@@ -6,6 +6,8 @@
 
 import { db } from './db';
 import { VERIFICATION_STATUSES } from '../types/models';
+import { firebaseChat } from './firebaseService';
+import { fcmService } from './fcmService';
 
 class AudioSynthesizer {
   constructor() {
@@ -512,11 +514,11 @@ export function verifyRfidEvent({
     }
   }
 
-  // Generate Parent SMS Notification
-  const parentMobile = student.parent_mobile || student.parent_phone || student.emergency_contact || 'N/A';
+  // Generate Parent FCM Push Notification (No Twilio, No SMS)
   const parentName = student.parent_name || 'Parent';
-  const timeFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const smsMessage = `Dear ${parentName}, your ward ${student.full_name} (${student.student_id}) has safely boarded Bus ${bus_id} at ${student.boarding_stop || 'Assigned Stop'} at ${timeFormatted}. - TransitIQ`;
+  const timeFormatted = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  const fcmTitle = 'TransitIQ – Bus Boarding Alert';
+  const fcmMessage = `Your child ${student.full_name} has boarded Bus ${bus_id} at ${timeFormatted}.`;
 
   const record = {
     event_id: event_id || `EVT-${Date.now().toString(36).toUpperCase()}`,
@@ -533,20 +535,55 @@ export function verifyRfidEvent({
     is_duplicate: false,
     synchronization_status: is_offline_sync ? 'Delayed Sync' : 'Synchronized',
     processed_at: new Date().toISOString(),
-    parent_sms: {
+    fcm_notification: {
       sent: true,
-      recipient_mobile: parentMobile,
-      recipient_name: parentName,
-      message_text: smsMessage,
-      gateway: 'Fast2SMS / Twilio Cloud Gateway',
+      channel: 'Firebase Cloud Messaging (FCM)',
+      title: fcmTitle,
+      body: fcmMessage,
+      recipient_student_id: student.student_id,
+      recipient_parent_name: parentName,
       dispatched_at: new Date().toISOString(),
-      delivery_status: 'Delivered'
+      delivery_status: 'Delivered to Parent Device'
     }
   };
 
   currentData.boarding_records.unshift(record);
   db.saveData();
   soundFx.playBeep('VALID');
+
+  // Sync to Firestore 'boarding_records' collection.
+  // This triggers the Cloud Function 'onBoardingRecordCreated' to send push notification via FCM.
+  firebaseChat.syncBoardingRecord(record);
+
+  // If this browser/device has registered as the parent for this student, trigger instant foreground notification
+  if (fcmService.activeRegistration?.student_id === student.student_id) {
+    fcmService.notifyListeners({
+      notification: {
+        title: fcmTitle,
+        body: fcmMessage
+      },
+      data: {
+        event_id: record.event_id,
+        student_id: student.student_id,
+        student_name: student.full_name,
+        bus_id: bus_id,
+        boarding_status: 'VALID',
+        timestamp: eventTimeIso
+      }
+    });
+
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(fcmTitle, {
+          body: fcmMessage,
+          icon: '/favicon.svg',
+          badge: '/favicon.svg'
+        });
+      } catch (e) {
+        console.warn('Native notification display note:', e);
+      }
+    }
+  }
 
   return {
     success: true,

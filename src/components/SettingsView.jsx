@@ -214,20 +214,72 @@ export default function SettingsView({ data, onRefresh, role }) {
               </div>
             </div>
 
-            <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <button 
-                type="button" 
-                onClick={handleTestFirebase}
-                className="btn btn-outline btn-sm"
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div className="form-group">
+                <label className="form-label">Messaging Sender ID</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. 1092837465..." 
+                  className="form-control"
+                  value={firebaseConfig.messagingSenderId || ''}
+                  onChange={(e) => setFirebaseConfig({ ...firebaseConfig, messagingSenderId: e.target.value })}
+                  disabled={!canEdit}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">App ID</label>
+                <input 
+                  type="text" 
+                  placeholder="1:109283...:web:..." 
+                  className="form-control"
+                  value={firebaseConfig.appId || ''}
+                  onChange={(e) => setFirebaseConfig({ ...firebaseConfig, appId: e.target.value })}
+                  disabled={!canEdit}
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginTop: '12px' }}>
+              <label className="form-label">Web Push VAPID Key (FCM Key Pair)</label>
+              <input 
+                type="text" 
+                placeholder="BElv..." 
+                className="form-control"
+                value={firebaseConfig.vapidKey || ''}
+                onChange={(e) => setFirebaseConfig({ ...firebaseConfig, vapidKey: e.target.value })}
                 disabled={!canEdit}
+              />
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                Found in Firebase Console &gt; Project Settings &gt; Cloud Messaging &gt; Web configuration &gt; Key pairs
+              </span>
+            </div>
+
+            <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button 
+                  type="button" 
+                  onClick={handleTestFirebase}
+                  className="btn btn-outline btn-sm"
+                  disabled={!canEdit}
+                >
+                  Test Firebase Connection
+                </button>
+                {fbStatusMessage && (
+                  <span style={{ fontSize: '11.5px', color: firebaseConfig.connected ? 'var(--status-valid)' : '#EF4444' }}>
+                    {fbStatusMessage}
+                  </span>
+                )}
+              </div>
+
+              <a
+                href="https://console.firebase.google.com/project/transitiq-c2d78/authentication"
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: '12px', color: 'var(--accent-teal)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}
               >
-                Test Firebase Connection
-              </button>
-              {fbStatusMessage && (
-                <span style={{ fontSize: '11.5px', color: firebaseConfig.connected ? 'var(--status-valid)' : '#EF4444' }}>
-                  {fbStatusMessage}
-                </span>
-              )}
+                Open Firebase Console (transitiq-c2d78) ↗
+              </a>
             </div>
           </div>
         </div>

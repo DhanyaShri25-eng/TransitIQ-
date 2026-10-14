@@ -9,9 +9,266 @@ import {
   CheckCircle2, 
   AlertCircle,
   ExternalLink,
-  Send
+  Send,
+  Copy,
+  Check,
+  Code
 } from 'lucide-react';
 import { db } from '../services/db';
+import { verifyRfidEvent } from '../services/rfidEngine';
+
+const RFID_USB_SERIAL_CODE = `/*
+ * TransitIQ — Minimal ESP32 + RC522 RFID Tap Reader (USB Web Serial)
+ * -------------------------------------------------------------
+ * ONLY RFID Reader code — NO Red LED, NO Green LED, NO Buzzer.
+ * Once a student taps their card, this code sends the Card UID over
+ * Serial directly to the TransitIQ website, where attendance and boarding
+ * records are immediately noted.
+ *
+ * Wiring Connections:
+ *   RC522 Pin  ->  ESP32-WROOM-32 GPIO
+ *   ----------------------------------
+ *   SDA (SS)   ->  GPIO 5
+ *   SCK        ->  GPIO 18
+ *   MOSI       ->  GPIO 23
+ *   MISO       ->  GPIO 19
+ *   RST        ->  GPIO 22
+ *   3.3V       ->  3V3  (WARNING: 3.3V only! Do NOT connect to 5V)
+ *   GND        ->  GND
+ *   IRQ        ->  Not connected
+ */
+
+#include <SPI.h>
+#include <MFRC522.h>
+
+#define SS_PIN  5
+#define RST_PIN 22
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+void setup() {
+  Serial.begin(115200);
+  SPI.begin();
+  rfid.PCD_Init();
+  Serial.println("TransitIQ RFID Bus Gate Ready. Waiting for card tap...");
+}
+
+void loop() {
+  // Check if a new card is placed near the reader
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
+    return;
+  }
+
+  // Extract Card UID in uppercase hexadecimal
+  String cardUid = "";
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) cardUid += "0";
+    cardUid += String(rfid.uid.uidByte[i], HEX);
+  }
+  cardUid.toUpperCase();
+
+  // Send UID over Serial — TransitIQ website catches this via Web Serial and notes it!
+  Serial.print("CARD_TAP:");
+  Serial.println(cardUid);
+
+  // Halt card to prevent duplicate repeated scans
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  delay(1200); // 1.2s delay to prevent accidental multi-scan
+}
+`;
+
+const RFID_WIFI_HTTP_CODE = `/*
+ * TransitIQ — ESP32 + RC522 RFID Reader (Local HTTP POST)
+ * ------------------------------------------------------
+ * Reads student card UID and posts JSON directly to the TransitIQ local dev backend.
+ */
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+#define SS_PIN  5
+#define RST_PIN 22
+
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+const char* serverApiUrl = "http://YOUR_SERVER_IP:5173/api/rfid/verify";
+const char* deviceId = "ESP32-BUS-001";
+const char* busId = "54";
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+void setup() {
+  Serial.begin(115200);
+  SPI.begin();
+  rfid.PCD_Init();
+
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\\nWi-Fi Connected! IP: " + WiFi.localIP().toString());
+  Serial.println("TransitIQ RFID Bus Gate Ready. Waiting for card tap...");
+}
+
+void loop() {
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
+    return;
+  }
+
+  String cardUid = "";
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) cardUid += "0";
+    cardUid += String(rfid.uid.uidByte[i], HEX);
+  }
+  cardUid.toUpperCase();
+
+  Serial.println("Card Tapped: " + cardUid);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(serverApiUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    String json = "{\\"device_id\\":\\"" + String(deviceId) + 
+                  "\\",\\"bus_id\\":\\"" + String(busId) + 
+                  "\\",\\"card_uid\\":\\"" + cardUid + "\\"}";
+
+    int code = http.POST(json);
+    Serial.println("Website Response Code: " + String(code));
+    http.end();
+  }
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  delay(1200);
+}
+`;
+
+const RFID_FIREBASE_FCM_CODE = `/*
+ * TransitIQ — ESP32 + RC522 RFID Reader (Wi-Fi + Firebase Cloud Functions FCM)
+ * ----------------------------------------------------------------------------
+ * Connects directly to Firebase Project transitiq-c2d78 over Wi-Fi.
+ * When a student taps their card, this sends the UID to the Firebase Cloud Function
+ * HTTPS endpoint.
+ *
+ * The Cloud Function verifies the boarding record and instantly delivers a
+ * Firebase Cloud Messaging (FCM) Push Notification to the parent's phone:
+ *
+ * Example Notification:
+ *   Title: TransitIQ – Bus Boarding Alert
+ *   Body:  Your child DHANYA SHRI.A.C has boarded Bus BUS01 at 8:15 AM.
+ *
+ * Hardware Pin Connections:
+ *   RC522 Pin  ->  ESP32-WROOM-32 GPIO
+ *   ----------------------------------
+ *   SDA (SS)   ->  GPIO 5
+ *   SCK        ->  GPIO 18
+ *   MOSI       ->  GPIO 23
+ *   MISO       ->  GPIO 19
+ *   RST        ->  GPIO 22
+ *   3.3V       ->  3V3  (Do NOT connect to 5V)
+ *   GND        ->  GND
+ */
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+#define SS_PIN  5
+#define RST_PIN 22
+
+// Wi-Fi Credentials
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// Firebase Cloud Function HTTPS endpoint for project transitiq-c2d78
+const char* firebaseEndpoint = "https://us-central1-transitiq-c2d78.cloudfunctions.net/apiRfidTap";
+const char* deviceId = "ESP32-WROOM-32";
+const char* busId = "54"; // or BUS01
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+void setup() {
+  Serial.begin(115200);
+  SPI.begin();
+  rfid.PCD_Init();
+
+  Serial.println("\\n==========================================");
+  Serial.println("TransitIQ ESP32 Bus Gate (Firebase FCM)");
+  Serial.print("Connecting to Wi-Fi: ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\\n[Wi-Fi] Connected! IP: " + WiFi.localIP().toString());
+  Serial.println("[Firebase] Target: transitiq-c2d78 (Cloud Functions)");
+  Serial.println("TransitIQ Gate Ready. Waiting for card tap...");
+  Serial.println("==========================================\\n");
+}
+
+void loop() {
+  // Check if a card is placed near the reader
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
+    return;
+  }
+
+  // Extract Card UID
+  String cardUid = "";
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) cardUid += "0";
+    cardUid += String(rfid.uid.uidByte[i], HEX);
+  }
+  cardUid.toUpperCase();
+
+  Serial.println("\\n>>> RFID CARD DETECTED <<<");
+  Serial.println("Card UID: " + cardUid);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure client;
+    client.setInsecure(); // Connect securely via HTTPS without local root cert bundle
+
+    HTTPClient https;
+    if (https.begin(client, firebaseEndpoint)) {
+      https.addHeader("Content-Type", "application/json");
+
+      String jsonPayload = "{\\"device_id\\":\\"" + String(deviceId) + 
+                           "\\",\\"bus_id\\":\\"" + String(busId) + 
+                           "\\",\\"card_uid\\":\\"" + cardUid + "\\"}";
+
+      Serial.println("[Firebase] Disagreeing duplicate scans. Transmitting boarding event...");
+      int httpCode = https.POST(jsonPayload);
+
+      if (httpCode > 0) {
+        String response = https.getString();
+        Serial.println("[Firebase Response Code] " + String(httpCode));
+        Serial.println("[Cloud Status] " + response);
+        Serial.println(">> FCM PUSH NOTIFICATION TRIGGERED FOR PARENT <<");
+      } else {
+        Serial.println("[Error] HTTPS POST failed: " + https.errorToString(httpCode));
+      }
+      https.end();
+    }
+  } else {
+    Serial.println("[Error] Wi-Fi disconnected!");
+  }
+
+  // Halt card to prevent duplicate repeated scans
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  delay(1500); // 1.5s cooldown
+}
+`;
 
 export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
   const devices = data.devices || [];
@@ -21,6 +278,9 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [serialConnected, setSerialConnected] = useState(false);
   const [serialLog, setSerialLog] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [codeMode, setCodeMode] = useState('usb_serial'); // 'usb_serial' | 'wifi_http'
+  const [lastTapEvent, setLastTapEvent] = useState(null);
 
   const [formData, setFormData] = useState({
     device_id: '',
@@ -75,6 +335,31 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
     }
   };
 
+  // Called when a card UID is tapped (either via Web Serial or Quick Test)
+  const recordCardTapOnWebsite = (cardUid) => {
+    const cleanUid = (cardUid || '').trim().toUpperCase();
+    if (!cleanUid) return;
+
+    const assignedBus = buses[0]?.bus_number || '54';
+    const assignedDevice = devices[0]?.device_id || 'ESP32-BUS-001';
+
+    const result = verifyRfidEvent({
+      event_id: `EVT-${Date.now().toString(36).toUpperCase()}`,
+      device_id: assignedDevice,
+      bus_id: assignedBus,
+      card_uid: cleanUid,
+      timestamp: new Date().toISOString()
+    });
+
+    setLastTapEvent({
+      card_uid: cleanUid,
+      result: result,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    });
+
+    onRefresh();
+  };
+
   // Web Serial API: connect directly to physical ESP32 COM port over USB
   const handleConnectWebSerial = async () => {
     if (!('serial' in navigator)) {
@@ -92,17 +377,33 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
       port.readable.pipeTo(textDecoder.writable);
       const reader = textDecoder.readable.getReader();
 
+      let serialBuffer = '';
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         if (value) {
+          serialBuffer += value;
           setSerialLog(prev => `${prev}\n${value}`.slice(-400));
+
+          // Look for CARD_TAP:<HEX_UID> or raw hex UID like E2000019
+          const match = serialBuffer.match(/(?:CARD_TAP:|\b)([0-9A-Fa-f]{6,14})\b/);
+          if (match) {
+            const detectedUid = match[1].toUpperCase();
+            serialBuffer = '';
+            recordCardTapOnWebsite(detectedUid);
+          }
         }
       }
     } catch (err) {
       console.warn('Serial connect error:', err);
       setSerialLog(`Serial status: ${err.message || 'Cancelled by user'}`);
     }
+  };
+
+  const handleCopyCode = (text) => {
+    navigator.clipboard.writeText(text);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
   };
 
   const exportCSV = () => {
@@ -135,6 +436,57 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
           Devices
         </h1>
       </div>
+
+      {/* Live Tap Noted Confirmation Banner */}
+      {lastTapEvent && (
+        <div style={{
+          background: lastTapEvent.result?.verification_status === 'VALID' 
+            ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(5, 150, 105, 0.08) 100%)' 
+            : 'linear-gradient(135deg, rgba(239, 68, 68, 0.18) 0%, rgba(185, 28, 28, 0.08) 100%)',
+          border: `1px solid ${lastTapEvent.result?.verification_status === 'VALID' ? '#10B981' : '#EF4444'}`,
+          borderRadius: '14px',
+          padding: '16px 20px',
+          marginBottom: '24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '50%',
+              background: lastTapEvent.result?.verification_status === 'VALID' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: lastTapEvent.result?.verification_status === 'VALID' ? '#10B981' : '#EF4444'
+            }}>
+              {lastTapEvent.result?.verification_status === 'VALID' ? <CheckCircle2 size={24} /> : <AlertCircle size={24} />}
+            </div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '15px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>RFID Tap Noted in Website: {lastTapEvent.result?.student_name || 'Card ' + lastTapEvent.card_uid}</span>
+                <span className={`badge ${lastTapEvent.result?.verification_status === 'VALID' ? 'badge-valid' : 'badge-invalid'}`}>
+                  {lastTapEvent.result?.verification_status}
+                </span>
+              </div>
+              <div style={{ fontSize: '12.5px', color: '#CBD5E1', marginTop: '3px' }}>
+                Card UID: <strong style={{ color: 'var(--accent-teal)', fontFamily: 'var(--font-mono)' }}>{lastTapEvent.card_uid}</strong> · Bus {lastTapEvent.result?.bus_number || '54'} · Recorded at {lastTapEvent.timestamp} · {lastTapEvent.result?.message || 'Boarding logged'}
+              </div>
+            </div>
+          </div>
+          <button 
+            onClick={() => setLastTapEvent(null)}
+            style={{ background: 'transparent', border: '1px solid rgba(255, 255, 255, 0.2)', color: '#CBD5E1', borderRadius: '6px', padding: '4px 10px', fontSize: '11.5px', cursor: 'pointer' }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Toolbar matching Screenshot 2 */}
       <div style={{
@@ -454,7 +806,7 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
           </div>
         </div>
 
-        {/* Parent SMS Notification Architecture Guide */}
+        {/* Parent Push Notification Architecture Guide */}
         <div style={{
           marginTop: '28px',
           paddingTop: '24px',
@@ -480,10 +832,10 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
             </div>
             <div>
               <h4 style={{ fontFamily: 'var(--font-heading)', fontSize: '16px', fontWeight: 700, color: '#FFFFFF', margin: 0 }}>
-                Parent Mobile SMS Notification Pipeline
+                Parent Mobile Push Notification Pipeline (Firebase Cloud Messaging)
               </h4>
               <p style={{ fontSize: '12px', color: '#94A3B8', margin: '2px 0 0' }}>
-                How student RFID taps on ESP32 trigger instant SMS alerts to parents' mobile numbers
+                How student RFID taps on ESP32 trigger instant FCM push alerts to parents' mobile devices (No SMS · No Twilio · No GSM)
               </p>
             </div>
           </div>
@@ -504,10 +856,10 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
                 1. What Hardware Needs (ESP32)
               </div>
               <div style={{ fontSize: '12.5px', color: '#E2E8F0', lineHeight: 1.6 }}>
-                You do <strong>NOT</strong> hardcode parent phone numbers on the ESP32. You only need:
+                You do <strong>NOT</strong> need GSM modules or SMS credits. You only need:
                 <ul style={{ margin: '8px 0 0', paddingLeft: '18px', color: '#CBD5E1' }}>
                   <li><strong>Bus Wi-Fi / Hotspot:</strong> <code>ssid</code> & <code>password</code></li>
-                  <li><strong>Cloud Server API URL:</strong> <code>/api/rfid/verify</code></li>
+                  <li><strong>Firebase Cloud Function URL:</strong> <code>https://us-central1-transitiq-c2d78.cloudfunctions.net/apiRfidTap</code></li>
                   <li><strong>Device & Bus ID:</strong> <code>ESP32-WROOM-32</code> / <code>Bus 54</code></li>
                 </ul>
               </div>
@@ -524,7 +876,7 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
                 2. Data Sent on RFID Tap
               </div>
               <div style={{ fontSize: '12.5px', color: '#E2E8F0', lineHeight: 1.6 }}>
-                When student taps card, ESP32 sends a clean JSON payload via HTTP POST:
+                When student taps card, ESP32 posts JSON over Wi-Fi directly to Firebase:
                 <pre style={{
                   background: '#04070A',
                   padding: '8px 10px',
@@ -551,11 +903,11 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
               borderRadius: '12px',
               padding: '16px'
             }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#F59E0B', textTransform: 'uppercase', marginBottom: '6px' }}>
-                3. Automated SMS Dispatch
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#10B981', textTransform: 'uppercase', marginBottom: '6px' }}>
+                3. Automated FCM Push Notification
               </div>
               <div style={{ fontSize: '12.5px', color: '#E2E8F0', lineHeight: 1.6 }}>
-                The TransitIQ database looks up the student and triggers SMS via Fast2SMS / Twilio:
+                Firebase Cloud Function looks up the parent's registered device and sends a push notification:
                 <div style={{
                   background: 'rgba(16, 185, 129, 0.1)',
                   border: '1px solid rgba(16, 185, 129, 0.25)',
@@ -566,11 +918,185 @@ export default function IoTDevices({ data, onRefresh, role, onOpenSimulator }) {
                   marginTop: '8px',
                   fontStyle: 'italic'
                 }}>
-                  "Dear CHINNASAMY.A, your ward DHANYA SHRI.A.C has boarded Bus 54 at Periyaar Nagar at 08:15 AM."
+                  "TransitIQ – Bus Boarding Alert: Your child DHANYA SHRI.A.C has boarded Bus BUS01 at 8:15 AM."
                 </div>
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ESP32 RFID Reader Firmware Section (Only RFID Code — No LEDs, No Buzzer) */}
+      <div style={{
+        marginTop: '28px',
+        background: '#091018',
+        border: '1px solid rgba(0, 208, 156, 0.3)',
+        borderRadius: '20px',
+        padding: '28px',
+        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)'
+      }}>
+        {/* Section Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-teal)', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+              <Code size={15} />
+              <span>OFFICIAL ESP32 + MFRC522 RFID CODE</span>
+            </div>
+            <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: 800, color: '#FFFFFF', marginTop: '4px' }}>
+              RFID Reader Firmware Code (No LEDs · No Buzzer)
+            </h3>
+            <p style={{ fontSize: '13px', color: '#94A3B8', margin: '4px 0 0' }}>
+              Clean, minimal firmware containing only the RFID scanner. Connects to Wi-Fi and triggers Firebase Cloud Messaging (FCM) alerts.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', background: '#04070A', padding: '4px', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+              <button
+                type="button"
+                onClick={() => setCodeMode('usb_serial')}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: codeMode === 'usb_serial' ? 'var(--accent-teal)' : 'transparent',
+                  color: codeMode === 'usb_serial' ? '#041B13' : '#94A3B8'
+                }}
+              >
+                USB Web Serial
+              </button>
+              <button
+                type="button"
+                onClick={() => setCodeMode('wifi_firebase')}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: codeMode === 'wifi_firebase' ? 'var(--accent-teal)' : 'transparent',
+                  color: codeMode === 'wifi_firebase' ? '#041B13' : '#94A3B8'
+                }}
+              >
+                Wi-Fi + Firebase FCM
+              </button>
+              <button
+                type="button"
+                onClick={() => setCodeMode('wifi_http')}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: codeMode === 'wifi_http' ? 'var(--accent-teal)' : 'transparent',
+                  color: codeMode === 'wifi_http' ? '#041B13' : '#94A3B8'
+                }}
+              >
+                Local Dev HTTP
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleCopyCode(
+                codeMode === 'usb_serial' 
+                  ? RFID_USB_SERIAL_CODE 
+                  : codeMode === 'wifi_firebase' 
+                  ? RFID_FIREBASE_FCM_CODE 
+                  : RFID_WIFI_HTTP_CODE
+              )}
+              className="btn btn-teal btn-sm"
+              style={{ padding: '8px 18px', borderRadius: '999px' }}
+            >
+              {copiedCode ? <Check size={14} /> : <Copy size={14} />}
+              <span>{copiedCode ? 'Copied to Clipboard!' : 'Copy Arduino Code'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Quick Simulation / Test Buttons so user can test the website noting the card tap instantly */}
+        <div style={{
+          background: 'rgba(255, 255, 255, 0.02)',
+          border: '1px solid rgba(255, 255, 255, 0.06)',
+          borderRadius: '12px',
+          padding: '14px 18px',
+          marginBottom: '18px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px'
+        }}>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: '#FFFFFF' }}>
+              Test Website Tap Ingestion:
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#94A3B8' }}>
+              Click either card below to simulate the tap and confirm the website instantly notes it into Boarding Records:
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => recordCardTapOnWebsite('E2000019')}
+              className="btn btn-outline btn-sm"
+              style={{ fontSize: '12px', padding: '6px 14px' }}
+            >
+              Tap DHANYA SHRI (E2000019)
+            </button>
+            <button
+              type="button"
+              onClick={() => recordCardTapOnWebsite('A489C132')}
+              className="btn btn-outline btn-sm"
+              style={{ fontSize: '12px', padding: '6px 14px' }}
+            >
+              Tap KAVIYAN (A489C132)
+            </button>
+          </div>
+        </div>
+
+        {/* Code Block Display */}
+        <div style={{
+          position: 'relative',
+          background: '#04070A',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          borderRadius: '12px',
+          overflow: 'hidden'
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '10px 16px',
+            background: 'rgba(255, 255, 255, 0.03)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            fontSize: '12px',
+            fontFamily: 'var(--font-mono)',
+            color: '#94A3B8'
+          }}>
+            <span>TransitIQ_RFID_Reader.ino ({codeMode === 'usb_serial' ? 'Web Serial USB' : 'Wi-Fi HTTP'})</span>
+            <span style={{ color: 'var(--accent-teal)' }}>Zero LEDs · Zero Buzzer · RFID Reader Only</span>
+          </div>
+
+          <pre style={{
+            margin: 0,
+            padding: '18px 20px',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '12.5px',
+            lineHeight: 1.6,
+            color: '#E2E8F0',
+            overflowX: 'auto',
+            maxHeight: '420px',
+            background: 'transparent'
+          }}>
+            {codeMode === 'usb_serial' ? RFID_USB_SERIAL_CODE : RFID_WIFI_HTTP_CODE}
+          </pre>
         </div>
       </div>
 

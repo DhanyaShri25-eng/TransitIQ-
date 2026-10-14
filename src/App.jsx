@@ -21,6 +21,9 @@ import ReportsAnalytics from './components/ReportsAnalytics';
 import FirebaseChat from './components/FirebaseChat';
 import SettingsView from './components/SettingsView';
 import HardwareSimulator from './components/HardwareSimulator';
+import ParentDeviceRegistration from './components/ParentDeviceRegistration';
+import { fcmService } from './services/fcmService';
+import { firebaseChat } from './services/firebaseService';
 
 export default function App() {
   const [data, setData] = useState(() => db.getSnapshot());
@@ -38,6 +41,14 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  // Auto-connect to Firebase if configuration exists
+  useEffect(() => {
+    const fbConfig = data.settings?.firebase_config;
+    if (fbConfig?.projectId && fbConfig?.apiKey && !firebaseChat.isFirebaseConnected) {
+      firebaseChat.initFirebase(fbConfig);
+    }
+  }, [data.settings]);
 
   // Sync theme class to body
   useEffect(() => {
@@ -190,6 +201,13 @@ export default function App() {
           {activeTab === 'boarding-records' && (
             <BoardingRecords 
               data={data}
+            />
+          )}
+
+          {activeTab === 'parent-fcm' && (
+            <ParentDeviceRegistration 
+              data={data}
+              onRefresh={handleRefresh}
             />
           )}
 

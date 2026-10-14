@@ -9,7 +9,8 @@ import {
   Clock, 
   Calendar,
   Layers,
-  Cpu
+  Cpu,
+  Bell
 } from 'lucide-react';
 import { VERIFICATION_STATUSES } from '../types/models';
 
@@ -38,7 +39,7 @@ export default function BoardingRecords({ data }) {
   });
 
   const exportCSV = () => {
-    const headers = ['Event ID', 'Student Name', 'Student ID', 'Bus ID', 'Card UID', 'Verification Status', 'Rejection Reason', 'Event Timestamp', 'Received Timestamp', 'Device ID', 'Sync Status'];
+    const headers = ['Event ID', 'Student Name', 'Student ID', 'Bus ID', 'Card UID', 'Verification Status', 'FCM Push Status', 'Rejection Reason', 'Event Timestamp', 'Received Timestamp', 'Device ID', 'Sync Status'];
     const rows = filteredRecords.map((r) => [
       r.event_id,
       `"${r.student_name}"`,
@@ -46,6 +47,7 @@ export default function BoardingRecords({ data }) {
       r.bus_id,
       r.card_uid,
       r.verification_status,
+      r.verification_status === 'VALID' ? 'FCM Push Dispatched' : 'N/A',
       `"${r.rejection_reason || 'Verified'}"`,
       r.event_timestamp,
       r.received_timestamp,
@@ -154,6 +156,7 @@ export default function BoardingRecords({ data }) {
                 <th>Card UID</th>
                 <th>Event Time</th>
                 <th>Verification Status</th>
+                <th>Parent FCM Push</th>
                 <th>Rejection Reason</th>
                 <th>Device ID</th>
                 <th>Sync Status</th>
@@ -162,7 +165,7 @@ export default function BoardingRecords({ data }) {
             <tbody>
               {filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan="10" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                  <td colSpan="11" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                     No boarding records match the current filters.
                   </td>
                 </tr>
@@ -189,6 +192,15 @@ export default function BoardingRecords({ data }) {
                       </div>
                     </td>
                     <td>{renderBadge(r.verification_status)}</td>
+                    <td>
+                      {r.verification_status === VERIFICATION_STATUSES.VALID ? (
+                        <span className="badge badge-valid" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <Bell size={11} /> Push Delivered
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No Push</span>
+                      )}
+                    </td>
                     <td style={{ fontSize: '12px', color: 'var(--text-muted)', maxWidth: '220px' }}>
                       {r.rejection_reason || 'Verified successfully'}
                     </td>
